@@ -1,0 +1,35 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcuserdatad/
+*.xcuserstate
+
+# Build and release artifacts
+build/
+*.dSYM/
+*.dSYM.zip
+*.pkg
+*.zip
+*.sha256
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+
+# Temporary files
+*.swp
+*.swo
+*~
+
+.rules
+
+.envrc
