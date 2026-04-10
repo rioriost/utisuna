@@ -17,8 +17,7 @@ Usage:
 
 Description:
   Build or reuse the release binary, codesign it, package it into a zip archive,
-  submit the zip to Apple notarization, then staple the ticket to the binary and
-  rebuild the zip for Homebrew distribution.
+  and submit the zip to Apple notarization for Homebrew distribution.
 
 Arguments:
   tag                  Optional release tag such as v0.1.0 or 0.1.0.
@@ -234,13 +233,6 @@ echo "==> Submitting zip for notarization"
 xcrun notarytool submit "$ZIP_PATH" \
   --keychain-profile "$NOTARY_PROFILE" \
   --wait
-
-echo "==> Stapling notarization ticket to binary"
-xcrun stapler staple "$BINARY_DEST"
-
-echo "==> Rebuilding zip with stapled binary"
-rm -f "$ZIP_PATH"
-ditto -c -k --keepParent "$STAGING_DIR" "$ZIP_PATH"
 
 if command -v shasum >/dev/null 2>&1; then
   shasum -a 256 "$ZIP_PATH" > "$CHECKSUM_PATH"
