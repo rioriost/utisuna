@@ -261,7 +261,7 @@ class Utisuna < Formula
   version "${VERSION}"
 
   def install
-    bin.install "${ARCHIVE_STEM}/utisuna" => "utisuna"
+    bin.install "utisuna" => "utisuna"
   end
 
   test do
