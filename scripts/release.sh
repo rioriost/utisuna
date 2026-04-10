@@ -233,10 +233,7 @@ EOF
 
   echo "==> Creating archive: $ZIP_PATH"
   rm -f "$ZIP_PATH"
-  (
-    cd "$ARTIFACTS_DIR"
-    zip -qry "$(basename "$ZIP_PATH")" "$(basename "$STAGING_DIR")"
-  )
+  COPYFILE_DISABLE=1 ditto -c -k --keepParent "$STAGING_DIR" "$ZIP_PATH"
 }
 
 write_checksum() {
@@ -316,7 +313,11 @@ publish_homebrew_tap() {
     echo "==> No Homebrew formula changes to commit"
   fi
 
-  git -C "$HOMEBREW_TAP_PATH" push
+  if ! git -C "$HOMEBREW_TAP_PATH" push; then
+    echo "==> Push rejected; rebasing tap repository and retrying"
+    git -C "$HOMEBREW_TAP_PATH" pull --rebase origin main
+    git -C "$HOMEBREW_TAP_PATH" push
+  fi
 }
 
 TAG_VALUE="$(detect_tag "${1:-}")"
