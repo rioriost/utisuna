@@ -5,12 +5,47 @@
 In plain English:
 
 ```bash
+utisuna /path/to/sample.txt /Applications/SomeApp.app
+```
+
+uses the content type of `sample.txt` and asks macOS to make `SomeApp.app` the default app for that type.
+
+That means the change applies to the **resolved content type**, not only to one path. For example, if the sample file resolves to `public.plain-text`, other plain-text files of the same type will follow the same default app.
+
+## Installation
+```bash
+brew install rioriost/tap/utisuna
+```
+
+## Usage
+
+```bash
+utisuna [--dry-run] [--verbose] [--role all|editor|viewer|shell|none] <sample-file> <application.app>
+```
+
+When you actually apply a change, macOS may show a confirmation dialog before switching the default app.
+
+![macOS confirmation dialog](images/dialog.png)
+
+### Examples
+
+Set Makefiles to open with Zed:
+
+```bash
 utisuna /path/to/Makefile /Applications/Zed.app
 ```
 
-uses the content type of `Makefile` and asks macOS to make `Zed.app` the default app for that type.
+Preview without making changes:
 
-That means the change applies to the **resolved content type**, not only to one path. For example, if the sample file resolves to `public.make-source`, other Makefiles of the same type will follow the same default app.
+```bash
+utisuna --dry-run ~/src/project/Makefile /Applications/Zed.app
+```
+
+Set Markdown files to open with BBEdit:
+
+```bash
+utisuna ./README.md /Applications/BBEdit.app
+```
 
 ## Why this exists
 
@@ -40,37 +75,10 @@ Binary path:
 .build/release/utisuna
 ```
 
-## Usage
-
-```bash
-utisuna [--dry-run] [--verbose] [--role all|editor|viewer|shell|none] <sample-file> <application.app>
-```
-
-### Examples
-
-Set Makefiles to open with Zed:
-
-```bash
-utisuna /path/to/Makefile /Applications/Zed.app
-```
-
-Preview without making changes:
-
-```bash
-utisuna --dry-run ~/src/project/Makefile /Applications/Zed.app
-```
-
-Set Markdown files to open with BBEdit:
-
-```bash
-utisuna ./README.md /Applications/BBEdit.app
-```
-
 ## Behavior notes
 
 - `utisuna` uses the sample file only to resolve its content type.
 - The update is performed through macOS APIs, not by editing Launch Services plist files directly.
-- On recent macOS versions, the system may show a confirmation prompt when changing default handlers.
 - The `--role` flag is accepted for future expansion and parity with the older Launch Services vocabulary. The current implementation uses the modern file-content-type API, which does not require you to manually resolve a UTI.
 
 ## Development
@@ -101,4 +109,4 @@ utisuna/
 
 ## License
 
-Choose whatever license fits your release plans. MIT is a reasonable default for a utility this small.
+MIT
