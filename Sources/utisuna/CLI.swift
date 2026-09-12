@@ -34,7 +34,7 @@ public enum CLIError: LocalizedError, Equatable {
 }
 
 public enum CLI {
-    public static let version = "0.1.0"
+    public static let version = "0.1.1"
 
     public static func parse(arguments: [String]) throws -> Options {
         var positional: [String] = []
