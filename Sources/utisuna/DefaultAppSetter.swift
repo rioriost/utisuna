@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
     import AppKit
 #endif
 
-public struct ResolvedPaths: Equatable {
+public struct ResolvedPaths: Equatable, Sendable {
     public let sampleFileURL: URL
     public let applicationURL: URL
 
@@ -15,7 +15,7 @@ public struct ResolvedPaths: Equatable {
     }
 }
 
-public struct ResolvedType: Equatable {
+public struct ResolvedType: Equatable, Sendable {
     public let identifier: String
     public let description: String
 

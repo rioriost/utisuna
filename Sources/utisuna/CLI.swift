@@ -1,6 +1,6 @@
 import Foundation
 
-public struct Options: Equatable {
+public struct Options: Equatable, Sendable {
     public var sampleFilePath: String
     public var applicationPath: String
     public var role: String
@@ -34,7 +34,7 @@ public enum CLIError: LocalizedError, Equatable {
 }
 
 public enum CLI {
-    public static let version = "0.1.2"
+    public static let version = "0.1.3"
 
     public static func parse(arguments: [String]) throws -> Options {
         var positional: [String] = []

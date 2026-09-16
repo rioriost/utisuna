@@ -114,7 +114,7 @@ are separate operations. No target implicitly overwrites an existing archive or
 published release.
 
 1. Update `CLI.version` and release notes, run `make test`, and commit the changes.
-2. Tag that exact clean commit, for example `git tag 0.1.2`.
+2. Tag that exact clean commit, for example `git tag 0.1.3`.
 3. Configure `SIGN_IDENTITY` and an existing `NOTARY_PROFILE` keychain profile.
    For publishing, also set `HOMEBREW_TAP_PATH` to a clean, synchronized checkout
    of `rioriost/homebrew-tap` on `main`.
@@ -122,16 +122,16 @@ published release.
 
 ```bash
 # Unsigned local package in build/unsigned; no signing or publishing.
-make release TAG=0.1.2
+make release TAG=0.1.3
 
 # Sign and notarize once in build; never publish.
-make notarize TAG=0.1.2
+make notarize TAG=0.1.3
 
 # Publish that same accepted archive, without rebuilding or signing again.
-make resume TAG=0.1.2
+make resume TAG=0.1.3
 
 # Alternatively, build, notarize and publish a new release in one operation.
-make publish TAG=0.1.2
+make publish TAG=0.1.3
 ```
 
 `make publish` checks the tag, tap and GitHub release before building. It refuses
@@ -143,7 +143,7 @@ may require manual reconciliation before retrying.
 
 The archive, portable `.sha256`, source-commit receipt, notarization receipt and
 generated Formula are kept together in `build`. Keep these files for resuming.
-To verify a downloaded archive, run `shasum -a 256 -c utisuna-0.1.2-macos.zip.sha256`
+To verify a downloaded archive, run `shasum -a 256 -c utisuna-0.1.3-macos.zip.sha256`
 from its download directory.
 
 `docs/utisuna.rb.template` is the single Formula template. Release scripts write

@@ -1,6 +1,6 @@
 import Foundation
 
-public struct OutputLines: Equatable {
+public struct OutputLines: Equatable, Sendable {
     public let lines: [String]
 
     public init(lines: [String]) {

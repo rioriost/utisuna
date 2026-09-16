@@ -49,7 +49,7 @@ struct CLITests {
         #expect(throws: CLIError.versionRequested) {
             try CLI.parse(arguments: [flag])
         }
-        #expect(CLI.version == "0.1.2")
+        #expect(CLI.version == "0.1.3")
     }
 
     @Test func helpDescribesImplementedBehavior() {
