@@ -1,394 +1,165 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT_DIR"
-
-APP_NAME="${APP_NAME:-utisuna}"
-CONFIGURATION="${CONFIGURATION:-release}"
-BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/.build}"
-ARTIFACTS_DIR="${ARTIFACTS_DIR:-$ROOT_DIR/build}"
-OUTPUT_BASENAME="${OUTPUT_BASENAME:-utisuna}"
-FORMULA_PATH="$ROOT_DIR/Formula/utisuna.rb"
-
-APP_REPO="${APP_REPO:-rioriost/utisuna}"
-HOMEBREW_TAP_REPO="${HOMEBREW_TAP_REPO:-rioriost/homebrew-tap}"
-HOMEBREW_TAP_PATH="${HOMEBREW_TAP_PATH:-}"
-DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
-
-NOTARIZE="${NOTARIZE:-1}"
-PUBLISH="${PUBLISH:-1}"
+# shellcheck source=scripts/release-common.sh
+source "$(dirname "$0")/release-common.sh"
 
 usage() {
   cat <<'EOF'
-Usage:
-  scripts/release.sh [tag]
+Usage: scripts/release.sh [--publish|--resume] [tag]
 
-Description:
-  Build the Swift CLI in release mode, optionally notarize it, create or update
-  the GitHub release, refresh Formula/utisuna.rb, and publish that formula to
-  github.com/rioriost/homebrew-tap.
+Default: build an unsigned local archive in build/unsigned. Never publish.
+--publish: preflight, build, sign, notarize, push refs, create release, update tap.
+--resume: publish the existing notarized archive without rebuilding or replacing it.
 
-Default behavior:
-  - Detect the latest git tag when no tag argument is given
-  - Build the release zip and checksum
-  - Notarize the zip unless NOTARIZE=0
-  - Create or update the GitHub release unless PUBLISH=0
-  - Refresh Formula/utisuna.rb in this repository
-  - Copy Formula/utisuna.rb into HOMEBREW_TAP_PATH and commit/push it unless PUBLISH=0
+HEAD must match the release tag and the worktree must be clean.
+Published archives are immutable; a fresh publish refuses an existing release.
+Resume accepts an existing release only if its assets match the local archive.
 
-Release procedure:
-  1. Confirm the working tree is clean and tests pass.
-  2. Create the release tag, for example:
-       git tag 0.1.0
-  3. Export release settings:
-       export SIGN_IDENTITY="Developer ID Application: Ryo Fujita (23889H77KX)"
-       export NOTARY_PROFILE="AC_PROFILE"
-       export HOMEBREW_TAP_PATH="../homebrew-tap"
-  4. Run:
-       scripts/release.sh
-  5. The script will:
-       - push the current branch and tag to github.com/rioriost/utisuna
-       - upload the zip and checksum to the GitHub release
-       - refresh Formula/utisuna.rb
-       - copy it to github.com/rioriost/homebrew-tap
-       - commit and push the tap update
-
-Arguments:
-  tag                  Optional release tag.
-                       If omitted, TAG env is used, then the latest git tag.
-
-Environment:
-  APP_NAME             Executable product name. Default: utisuna
-  CONFIGURATION        Swift build configuration. Default: release
-  BUILD_DIR            SwiftPM build directory. Default: .build
-  ARTIFACTS_DIR        Output directory for packaged artifacts. Default: build
-  OUTPUT_BASENAME      Base name used for packaged files. Default: utisuna
-  TAG                  Release tag if not passed as the first argument
-
-  APP_REPO             GitHub repo for releases. Default: rioriost/utisuna
-  HOMEBREW_TAP_REPO    GitHub tap repo. Default: rioriost/homebrew-tap
-  HOMEBREW_TAP_PATH    Local checkout of github.com/rioriost/homebrew-tap
-  DEFAULT_BRANCH       Branch to push before the tag. Default: main
-
-  NOTARIZE             Set to 1 to notarize the generated zip archive. Default: 1
-  PUBLISH              Set to 1 to publish GitHub release and tap update. Default: 1
-
-  SIGN_IDENTITY        Required when NOTARIZE=1. Developer ID Application identity
-  NOTARY_PROFILE       Recommended when NOTARIZE=1. Existing notarytool profile
-
-  RELEASE_NOTES        Optional notes for gh release create
-  TAP_COMMIT_MESSAGE   Optional commit message for the tap update
+Signing: SIGN_IDENTITY, NOTARY_PROFILE (existing notarytool keychain profile).
+Publishing: HOMEBREW_TAP_PATH (clean checkout, synchronized with origin/main).
+Optional: TAG, BUILD_DIR, ARTIFACTS_DIR, CONFIGURATION, SWIFT, OUTPUT_BASENAME,
+          APP_REPO, HOMEBREW_TAP_REPO, DEFAULT_BRANCH, RELEASE_NOTES.
+NOTARIZE=1 creates a signed local archive. PUBLISH=1 also requires NOTARIZE=1.
+The generated Formula is saved beside the archive; tracked files are not edited.
 
 Examples:
-  scripts/release.sh
-  scripts/release.sh 0.1.0
-  NOTARIZE=0 PUBLISH=0 scripts/release.sh 0.1.0
-  HOMEBREW_TAP_PATH=../homebrew-tap scripts/release.sh
+  scripts/release.sh 0.1.2
+  scripts/notarize.sh 0.1.2
+  HOMEBREW_TAP_PATH=../homebrew-tap scripts/release.sh --resume 0.1.2
 EOF
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
+PUBLISH="${PUBLISH:-0}"
+NOTARIZE="${NOTARIZE:-0}"
+RESUME=0
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+  --publish) PUBLISH=1; NOTARIZE=1; shift ;;
+  --resume) PUBLISH=1; NOTARIZE=1; RESUME=1; shift ;;
+esac
+[[ $# -le 1 ]] || fail "Expected at most one release tag."
+[[ "$PUBLISH" =~ ^[01]$ && "$NOTARIZE" =~ ^[01]$ ]] || fail "PUBLISH and NOTARIZE must be 0 or 1."
+[[ "$PUBLISH" == "0" || "$NOTARIZE" == "1" ]] || fail "Publishing requires notarization."
+if [[ "$NOTARIZE" == "0" && -z "${ARTIFACTS_DIR:-}" ]]; then
+  ARTIFACTS_DIR="$(cd "$(dirname "$0")/.." && pwd)/build/unsigned"
 fi
 
-require_cmd() {
-  local cmd="$1"
-  local hint="$2"
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "ERROR: Required command not found: $cmd"
-    echo "Hint: $hint"
-    exit 1
-  fi
+check_origin() {
+  local repo_path="$1" expected="$2" remote
+  remote="$(git -C "$repo_path" remote get-url origin)"
+  case "$remote" in
+    https://github.com/*) remote="${remote#https://github.com/}" ;;
+    git@github.com:*) remote="${remote#git@github.com:}" ;;
+    *) fail "Unsupported origin URL: $remote" ;;
+  esac
+  [[ "${remote%.git}" == "$expected" ]] || fail "Origin must be github.com/$expected."
 }
 
-require_env() {
-  local var_name="$1"
-  local hint="$2"
-  local value="${!var_name:-}"
-  if [[ -z "$value" ]]; then
-    echo "ERROR: Required environment variable is not set: $var_name"
-    echo "Hint: $hint"
-    exit 1
-  fi
-}
-
-detect_tag() {
-  local explicit_tag="${1:-}"
-  if [[ -n "$explicit_tag" ]]; then
-    printf '%s\n' "$explicit_tag"
-    return 0
-  fi
-
-  if [[ -n "${TAG:-}" ]]; then
-    printf '%s\n' "$TAG"
-    return 0
-  fi
-
-  if command -v git >/dev/null 2>&1; then
-    local git_tag
-    git_tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
-    if [[ -n "$git_tag" ]]; then
-      printf '%s\n' "$git_tag"
-      return 0
+preflight_publish() {
+  require_cmd gh
+  [[ -n "${HOMEBREW_TAP_PATH:-}" ]] || fail "Set HOMEBREW_TAP_PATH before publishing."
+  HOMEBREW_TAP_PATH="$(cd "$HOMEBREW_TAP_PATH" && pwd -P)" ||
+    fail "HOMEBREW_TAP_PATH does not exist."
+  [[ "$(git -C "$HOMEBREW_TAP_PATH" rev-parse --show-toplevel)" == "$HOMEBREW_TAP_PATH" ]] ||
+    fail "HOMEBREW_TAP_PATH must be the root of a git checkout."
+  [[ -z "$(git -C "$HOMEBREW_TAP_PATH" status --porcelain)" ]] ||
+    fail "Tap worktree and index must be clean; no files have been overwritten."
+  check_origin "$ROOT_DIR" "$APP_REPO"
+  check_origin "$HOMEBREW_TAP_PATH" "$HOMEBREW_TAP_REPO"
+  [[ "$(git -C "$HOMEBREW_TAP_PATH" symbolic-ref --short HEAD)" == "$DEFAULT_BRANCH" ]] ||
+    fail "Tap must be on $DEFAULT_BRANCH."
+  gh auth status -h github.com >/dev/null 2>&1 || fail "GitHub CLI authentication failed."
+  git -C "$HOMEBREW_TAP_PATH" fetch --quiet origin "$DEFAULT_BRANCH"
+  local tap_head tap_remote
+  tap_head="$(git -C "$HOMEBREW_TAP_PATH" rev-parse HEAD)"
+  TAP_HEAD="$tap_head"
+  tap_remote="$(git -C "$HOMEBREW_TAP_PATH" rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")"
+  if [[ "$tap_head" != "$tap_remote" ]]; then
+    if [[ "$RESUME" != "1" || ! -f "$ZIP_PATH.tap-commit" ]] ||
+      [[ "$(cat "$ZIP_PATH.tap-commit")" != "$tap_head" ]] ||
+      [[ "$(git -C "$HOMEBREW_TAP_PATH" rev-parse HEAD^)" != "$tap_remote" ]] ||
+      [[ "$(git -C "$HOMEBREW_TAP_PATH" diff-tree --no-commit-id --name-only -r HEAD)" != "Formula/utisuna.rb" ]]; then
+      fail "Tap must match origin/$DEFAULT_BRANCH; refusing to push unrelated commits."
     fi
   fi
-
-  printf '%s\n' ""
+  RELEASE_ID="$(gh api --paginate "repos/$APP_REPO/releases" \
+    --jq ".[] | select(.tag_name == \"$TAG_VALUE\") | .id")"
+  if [[ -n "$RELEASE_ID" && "$RESUME" != "1" ]]; then
+    fail "Release $TAG_VALUE already exists. Use --resume with the identical notarized archive."
+  fi
+  if [[ -z "$RELEASE_ID" ]]; then
+    [[ "$(git symbolic-ref --short HEAD)" == "$DEFAULT_BRANCH" ]] ||
+      fail "Publish a new release from $DEFAULT_BRANCH at the tagged commit."
+  fi
 }
 
-normalize_version() {
-  local raw="$1"
-  if [[ -z "$raw" ]]; then
-    printf '%s\n' "dev"
+verify_remote_assets() {
+  local download_dir
+  download_dir="$(mktemp -d "$ARTIFACTS_DIR/.utisuna-download.XXXXXX")"
+  if ! gh release download "$TAG_VALUE" --repo "$APP_REPO" \
+    --pattern "$ARCHIVE_STEM.zip" --pattern "$ARCHIVE_STEM.zip.sha256" --dir "$download_dir"; then
+    rm -f "$download_dir/$ARCHIVE_STEM.zip" "$download_dir/$ARCHIVE_STEM.zip.sha256"
+    rmdir "$download_dir"
+    fail "Could not download existing assets; refusing to replace them."
+  fi
+  local matches=1
+  cmp -s "$ZIP_PATH" "$download_dir/$ARCHIVE_STEM.zip" || matches=0
+  cmp -s "$CHECKSUM_PATH" "$download_dir/$ARCHIVE_STEM.zip.sha256" || matches=0
+  rm -f "$download_dir/$ARCHIVE_STEM.zip" "$download_dir/$ARCHIVE_STEM.zip.sha256"
+  rmdir "$download_dir"
+  [[ "$matches" == "1" ]] || fail "Remote release assets differ. They will not be overwritten."
+}
+
+publish_release() {
+  validate_source
+  if [[ -n "$RELEASE_ID" ]]; then
+    verify_remote_assets
   else
-    printf '%s\n' "${raw#v}"
-  fi
-}
-
-resolve_binary_path() {
-  local candidate
-
-  candidate="$BUILD_DIR/$CONFIGURATION/$APP_NAME"
-  if [[ -x "$candidate" ]]; then
-    printf '%s\n' "$candidate"
-    return 0
-  fi
-
-  candidate="$BUILD_DIR/apple/Products/$CONFIGURATION/$APP_NAME"
-  if [[ -x "$candidate" ]]; then
-    printf '%s\n' "$candidate"
-    return 0
-  fi
-
-  candidate="$BUILD_DIR/arm64-apple-macosx/$CONFIGURATION/$APP_NAME"
-  if [[ -x "$candidate" ]]; then
-    printf '%s\n' "$candidate"
-    return 0
-  fi
-
-  return 1
-}
-
-ensure_clean_worktree() {
-  if [[ -n "$(git status --porcelain)" ]]; then
-    echo "ERROR: Working tree is not clean."
-    echo "Commit or stash changes before running the release flow."
-    exit 1
-  fi
-}
-
-ensure_tag_exists_locally() {
-  if ! git rev-parse -q --verify "refs/tags/$TAG_VALUE" >/dev/null 2>&1; then
-    echo "ERROR: Tag not found locally: $TAG_VALUE"
-    echo "Create it first, for example: git tag $TAG_VALUE"
-    exit 1
-  fi
-}
-
-ensure_gh_auth() {
-  if ! gh auth status -h github.com >/dev/null 2>&1; then
-    echo "ERROR: gh CLI is not authenticated."
-    echo "Run: gh auth login"
-    exit 1
-  fi
-}
-
-push_release_refs() {
-  echo "==> Pushing branch and tag to origin"
-  git push origin "$DEFAULT_BRANCH"
-  git push origin "$TAG_VALUE"
-}
-
-create_archive() {
-  echo "==> Preparing artifacts"
-  rm -rf "$STAGING_DIR"
-  mkdir -p "$STAGING_DIR"
-  mkdir -p "$ARTIFACTS_DIR"
-
-  cp "$BINARY_PATH" "$BINARY_DEST"
-  chmod +x "$BINARY_DEST"
-
-  if [[ -f "$ROOT_DIR/README.md" ]]; then
-    cp "$ROOT_DIR/README.md" "$STAGING_DIR/README.md"
-  fi
-
-  if [[ -f "$ROOT_DIR/LICENSE" ]]; then
-    cp "$ROOT_DIR/LICENSE" "$STAGING_DIR/LICENSE"
-  fi
-
-  cat > "$STAGING_DIR/INSTALL.txt" <<EOF
-utisuna release package
-
-Version: $VERSION
-Executable: $APP_NAME
-
-Run directly:
-  ./${APP_NAME} --help
-
-Or install somewhere on your PATH:
-  install -m 0755 ${APP_NAME} /usr/local/bin/${APP_NAME}
-EOF
-
-  echo "==> Creating archive: $ZIP_PATH"
-  rm -f "$ZIP_PATH"
-  COPYFILE_DISABLE=1 ditto -c -k --keepParent "$STAGING_DIR" "$ZIP_PATH"
-}
-
-write_checksum() {
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$ZIP_PATH" > "$CHECKSUM_PATH"
-  elif command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$ZIP_PATH" > "$CHECKSUM_PATH"
-  else
-    echo "WARN: No SHA-256 tool found; checksum file was not created."
-  fi
-}
-
-refresh_formula() {
-  local checksum
-  checksum="$(awk '{print $1}' "$CHECKSUM_PATH")"
-
-  echo "==> Refreshing Homebrew formula: $FORMULA_PATH"
-  mkdir -p "$(dirname "$FORMULA_PATH")"
-  cat > "$FORMULA_PATH" <<EOF
-class Utisuna < Formula
-  desc "Set the default app for the content type of a sample file"
-  homepage "https://github.com/${APP_REPO}"
-  url "https://github.com/${APP_REPO}/releases/download/${TAG_VALUE}/${ARCHIVE_STEM}.zip"
-  sha256 "${checksum}"
-  version "${VERSION}"
-
-  def install
-    bin.install "utisuna" => "utisuna"
-  end
-
-  test do
-    assert_match "Set the default app for the content type of a sample file",
-                 shell_output("#{bin}/utisuna --help")
-  end
-end
-EOF
-}
-
-publish_github_release() {
-  local target_ref
-  target_ref="$(git rev-parse "$TAG_VALUE")"
-
-  echo "==> Publishing GitHub release: $TAG_VALUE"
-  if gh release view "$TAG_VALUE" --repo "$APP_REPO" >/dev/null 2>&1; then
-    gh release upload "$TAG_VALUE" "$ZIP_PATH" "$CHECKSUM_PATH" --clobber --repo "$APP_REPO"
-  else
+    git push --atomic origin "$SOURCE_COMMIT:refs/heads/$DEFAULT_BRANCH" "refs/tags/$TAG_VALUE"
+    local notes_args=(--generate-notes)
     if [[ -n "${RELEASE_NOTES:-}" ]]; then
-      gh release create "$TAG_VALUE" "$ZIP_PATH" "$CHECKSUM_PATH" \
-        --notes "$RELEASE_NOTES" \
-        --repo "$APP_REPO" \
-        --target "$target_ref"
-    else
-      gh release create "$TAG_VALUE" "$ZIP_PATH" "$CHECKSUM_PATH" \
-        --generate-notes \
-        --repo "$APP_REPO" \
-        --target "$target_ref"
+      notes_args=(--notes "$RELEASE_NOTES")
     fi
+    gh release create "$TAG_VALUE" "$ZIP_PATH" "$CHECKSUM_PATH" --repo "$APP_REPO" \
+      --verify-tag --title "utisuna $VERSION" "${notes_args[@]}"
+    verify_remote_assets
   fi
-}
-
-publish_homebrew_tap() {
-  require_env HOMEBREW_TAP_PATH "Set HOMEBREW_TAP_PATH to the local checkout of github.com/${HOMEBREW_TAP_REPO}."
-
-  if [[ ! -d "$HOMEBREW_TAP_PATH/.git" ]]; then
-    echo "ERROR: HOMEBREW_TAP_PATH is not a git repository: $HOMEBREW_TAP_PATH"
-    exit 1
-  fi
-
-  echo "==> Updating Homebrew tap: $HOMEBREW_TAP_PATH"
+  printf '==> GitHub release assets verified; updating tap\n' >&2
+  [[ "$(git -C "$HOMEBREW_TAP_PATH" rev-parse HEAD)" == "$TAP_HEAD" ]] ||
+    fail "Tap HEAD changed during publication. Keep the archive and retry with --resume."
+  [[ -z "$(git -C "$HOMEBREW_TAP_PATH" status --porcelain)" ]] ||
+    fail "Tap changed during publication. Keep the archive and retry with --resume."
   mkdir -p "$HOMEBREW_TAP_PATH/Formula"
   cp "$FORMULA_PATH" "$HOMEBREW_TAP_PATH/Formula/utisuna.rb"
-
-  git -C "$HOMEBREW_TAP_PATH" add Formula/utisuna.rb
-  if ! git -C "$HOMEBREW_TAP_PATH" diff --cached --quiet; then
-    git -C "$HOMEBREW_TAP_PATH" commit -m "${TAP_COMMIT_MESSAGE:-utisuna ${VERSION}}"
-  else
-    echo "==> No Homebrew formula changes to commit"
+  git -C "$HOMEBREW_TAP_PATH" add -- Formula/utisuna.rb
+  if ! git -C "$HOMEBREW_TAP_PATH" diff --cached --quiet -- Formula/utisuna.rb; then
+    git -C "$HOMEBREW_TAP_PATH" commit --only -m "utisuna $VERSION" \
+      -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>" -- Formula/utisuna.rb
   fi
-
-  if ! git -C "$HOMEBREW_TAP_PATH" push; then
-    echo "==> Push rejected; rebasing tap repository and retrying"
-    git -C "$HOMEBREW_TAP_PATH" pull --rebase origin main
-    git -C "$HOMEBREW_TAP_PATH" push
-  fi
+  local tap_commit
+  tap_commit="$(git -C "$HOMEBREW_TAP_PATH" rev-parse HEAD)"
+  printf '%s\n' "$tap_commit" > "$ZIP_PATH.tap-commit"
+  git -C "$HOMEBREW_TAP_PATH" push origin "$tap_commit:refs/heads/$DEFAULT_BRANCH" ||
+    fail "Release exists, but tap push failed. Keep these artifacts and retry with --resume; do not rebuild."
 }
 
-TAG_VALUE="$(detect_tag "${1:-}")"
-if [[ -z "$TAG_VALUE" ]]; then
-  echo "ERROR: No git tag found. Pass a tag as an argument, set TAG, or create a tag first."
-  exit 1
+init_release "${1:-}"
+validate_source
+if [[ "$RESUME" == "1" ]]; then
+  verify_archive
 fi
-
-VERSION="$(normalize_version "$TAG_VALUE")"
-ARCHIVE_STEM="${OUTPUT_BASENAME}-${VERSION}-macos"
-STAGING_DIR="$ARTIFACTS_DIR/$ARCHIVE_STEM"
-BINARY_DEST="$STAGING_DIR/$APP_NAME"
-ZIP_PATH="$ARTIFACTS_DIR/$ARCHIVE_STEM.zip"
-CHECKSUM_PATH="$ZIP_PATH.sha256"
-
-require_cmd git "Install git and ensure the repository is available."
-require_cmd swift "Install a recent Swift toolchain with Swift Package Manager."
-require_cmd zip "Install the zip command line tool."
-
-ensure_clean_worktree
-ensure_tag_exists_locally
-
 if [[ "$PUBLISH" == "1" ]]; then
-  require_cmd gh "Install GitHub CLI: https://cli.github.com/"
-  ensure_gh_auth
+  preflight_publish
 fi
-
-echo "==> Building $APP_NAME ($CONFIGURATION)"
-swift build -c "$CONFIGURATION"
-
-BINARY_PATH="$(resolve_binary_path)" || {
-  echo "ERROR: Built binary not found under $BUILD_DIR"
-  echo "Checked common SwiftPM output locations for executable: $APP_NAME"
-  exit 1
-}
-
-create_archive
-write_checksum
-
-if [[ "$NOTARIZE" == "1" ]]; then
-  if [[ ! -x "$ROOT_DIR/scripts/notarize.sh" ]]; then
-    echo "ERROR: NOTARIZE=1 was requested, but scripts/notarize.sh is missing or not executable."
-    exit 1
+if [[ "$RESUME" == "0" ]]; then
+  if [[ "$NOTARIZE" == "1" ]]; then
+    require_notary_settings
   fi
-
-  echo "==> Running notarization helper for zip archive"
-  ZIP_PATH="$ZIP_PATH" PRODUCT_NAME="$APP_NAME" VERSION="$VERSION" ARTIFACTS_DIR="$ARTIFACTS_DIR" \
-    "$ROOT_DIR/scripts/notarize.sh" "$TAG_VALUE"
-  write_checksum
+  create_archive
 fi
-
-refresh_formula
-
+verify_archive
+write_formula
 if [[ "$PUBLISH" == "1" ]]; then
-  push_release_refs
-  publish_github_release
-  publish_homebrew_tap
+  publish_release
 fi
-
-cat <<EOF
-
-Release artifacts:
-- Repo: $APP_REPO
-- Tag: $TAG_VALUE
-- Version: $VERSION
-- Binary: $BINARY_PATH
-- Archive: $ZIP_PATH
-- Staging: $STAGING_DIR
-- Checksum: $CHECKSUM_PATH
-- Formula: $FORMULA_PATH
-- Notarize: $NOTARIZE
-- Publish: $PUBLISH
-
-EOF
+printf 'Archive: %s\nChecksum: %s\nFormula: %s\n' "$ZIP_PATH" "$CHECKSUM_PATH" "$FORMULA_PATH"

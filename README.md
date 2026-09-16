@@ -17,10 +17,13 @@ That means the change applies to the **resolved content type**, not only to one 
 brew install rioriost/tap/utisuna
 ```
 
+The Homebrew binary requires **Apple Silicon (arm64) and macOS 12 or later**.
+Intel users must build from source with a compatible Swift toolchain.
+
 ## Usage
 
 ```bash
-utisuna [--dry-run] [--verbose] [--role all|editor|viewer|shell|none] <sample-file> <application.app>
+utisuna [--dry-run] [--verbose] [--role all] [--] <sample-file> <application.app>
 ```
 
 When you actually apply a change, macOS may show a confirmation dialog before switching the default app.
@@ -60,8 +63,11 @@ It is intentionally small and boring.
 
 ## Requirements
 
-- macOS 12 or later
-- Xcode 15+ or a recent Swift toolchain with Swift Package Manager
+- Runtime: macOS 12 or later.
+- Homebrew/release binaries: Apple Silicon (arm64).
+- Source builds: Swift 6.0 or later with Swift Package Manager (Xcode 16 or later
+  when using the bundled toolchain). The build host must satisfy that toolchain's
+  own macOS requirements.
 
 ## Build
 
@@ -78,16 +84,80 @@ Binary path:
 ## Behavior notes
 
 - `utisuna` uses the sample file only to resolve its content type.
+- Samples must be regular files or recognized package documents, not ordinary
+  directories or special files. The destination must be a valid application bundle.
 - The update is performed through macOS APIs, not by editing Launch Services plist files directly.
-- The `--role` flag is accepted for future expansion and parity with the older Launch Services vocabulary. The current implementation uses the modern file-content-type API, which does not require you to manually resolve a UTI.
+- `--role all` is accepted for compatibility. Role-specific changes (`editor`,
+  `viewer`, `shell`, or `none`) are unsupported and are rejected before making
+  changes; older versions silently ignored these values.
+- `--verbose` adds information about the scope of the change and system consent.
+- Use `--` before paths beginning with `-`.
 
 ## Development
 
 Run tests:
 
 ```bash
-swift test
+make test
 ```
+
+This runs the Swift tests and isolated release-workflow tests (Python 3 required).
+Release tests use temporary repositories and command stubs, without changing
+default applications, accessing signing credentials, or publishing anything.
+Run only the Swift tests with `swift test`, or release tests with `make test-release`.
+Custom build directories are supported, for example `make test BUILD_DIR="/tmp/utisuna build"`.
+
+## Releases
+
+Distribution builds target arm64 and macOS 12. Build, notarization and publishing
+are separate operations. No target implicitly overwrites an existing archive or
+published release.
+
+1. Update `CLI.version` and release notes, run `make test`, and commit the changes.
+2. Tag that exact clean commit, for example `git tag 0.1.2`.
+3. Configure `SIGN_IDENTITY` and an existing `NOTARY_PROFILE` keychain profile.
+   For publishing, also set `HOMEBREW_TAP_PATH` to a clean, synchronized checkout
+   of `rioriost/homebrew-tap` on `main`.
+4. Choose one of these flows:
+
+```bash
+# Unsigned local package in build/unsigned; no signing or publishing.
+make release TAG=0.1.2
+
+# Sign and notarize once in build; never publish.
+make notarize TAG=0.1.2
+
+# Publish that same accepted archive, without rebuilding or signing again.
+make resume TAG=0.1.2
+
+# Alternatively, build, notarize and publish a new release in one operation.
+make publish TAG=0.1.2
+```
+
+`make publish` checks the tag, tap and GitHub release before building. It refuses
+an existing release. `make resume` accepts an existing release only when the
+downloaded zip and checksum match the local artifacts byte-for-byte. If a tap
+push fails, keep the artifacts and retry `make resume`; the script does not
+automatically rebase or overwrite unrelated tap work. Remote changes to the tap
+may require manual reconciliation before retrying.
+
+The archive, portable `.sha256`, source-commit receipt, notarization receipt and
+generated Formula are kept together in `build`. Keep these files for resuming.
+To verify a downloaded archive, run `shasum -a 256 -c utisuna-0.1.2-macos.zip.sha256`
+from its download directory.
+
+`docs/utisuna.rb.template` is the single Formula template. Release scripts write
+the generated Formula beside the archive, leaving the source worktree clean.
+After publication succeeds, copy that generated Formula to `Formula/utisuna.rb`
+and commit it separately; keep the release tag on the source commit that built
+the executable. To resume an already-published release after further commits,
+use a clean checkout of its source tag and the original artifacts. Resume does
+not push the source branch when the GitHub release already exists.
+
+The scripts support `BUILD_DIR`, `ARTIFACTS_DIR`, `SWIFT`, `CONFIGURATION` and
+`OUTPUT_BASENAME`. `NOTARIZE=1 scripts/release.sh <tag>` creates a notarized local
+archive; publishing is opt-in with `--publish` or `--resume`. Notarization uses
+an existing keychain profile and never stores raw Apple ID passwords.
 
 ## Project layout
 

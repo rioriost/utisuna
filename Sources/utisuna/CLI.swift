@@ -34,17 +34,25 @@ public enum CLIError: LocalizedError, Equatable {
 }
 
 public enum CLI {
-    public static let version = "0.1.1"
+    public static let version = "0.1.2"
 
     public static func parse(arguments: [String]) throws -> Options {
         var positional: [String] = []
         var dryRun = false
         var verbose = false
         var role = "all"
+        var endOfOptions = false
 
         var iterator = arguments.makeIterator()
         while let arg = iterator.next() {
+            if endOfOptions {
+                positional.append(arg)
+                continue
+            }
+
             switch arg {
+            case "--":
+                endOfOptions = true
             case "-h", "--help":
                 throw CLIError.helpRequested
             case "-V", "--version":
@@ -57,14 +65,17 @@ public enum CLI {
                 guard let value = iterator.next(), !value.hasPrefix("-") else {
                     throw CLIError.invalidArguments("Missing value for --role.")
                 }
-                role = value
+                do {
+                    role = try RoleMapper.normalize(value)
+                } catch {
+                    throw CLIError.invalidArguments(error.localizedDescription)
+                }
             default:
+                guard !arg.hasPrefix("-") || arg == "-" else {
+                    throw CLIError.invalidArguments("Unknown option: \(arg). Use -- before paths that begin with '-'.")
+                }
                 positional.append(arg)
             }
-        }
-
-        guard ["all", "editor", "viewer", "shell", "none"].contains(role) else {
-            throw CLIError.invalidArguments("Unsupported role: \(role). Use one of: all, editor, viewer, shell, none.")
         }
 
         guard positional.count == 2 else {
@@ -86,18 +97,24 @@ public enum CLI {
         Set the default app for the content type of a sample file.
 
         USAGE:
-          \(programName) [--dry-run] [--verbose] [--role all|editor|viewer|shell|none] <sample-file> <application.app>
+          \(programName) [--dry-run] [--verbose] [--role all] [--] <sample-file> <application.app>
           \(programName) --help
           \(programName) --version
 
         EXAMPLES:
           \(programName) /path/to/Makefile /Applications/Zed.app
           \(programName) --dry-run ~/work/Makefile /Applications/Zed.app
-          \(programName) --role editor ./README.md /Applications/BBEdit.app
+          \(programName) --verbose ./README.md /Applications/BBEdit.app
+          \(programName) -- -sample.txt /Applications/BBEdit.app
 
         NOTES:
-          - The sample file is used only to resolve its content type.
+          - The sample must be a regular file or a recognized package document (such as .rtfd).
+          - The sample is used only to resolve its content type; the app must be a valid application bundle.
           - The change applies to that content type, not only to one file path.
+          - --role all is a compatibility option; role-specific changes are unsupported.
+          - --dry-run validates paths and resolves the type without changing defaults.
+          - --verbose adds scope and macOS confirmation diagnostics.
+          - Use -- to end options before paths that begin with '-'.
           - On recent macOS versions, the system may show a confirmation prompt.
         """
     }

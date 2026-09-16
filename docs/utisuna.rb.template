@@ -1,16 +1,20 @@
 class Utisuna < Formula
   desc "Set the default app for the content type of a sample file"
-  homepage "https://github.com/rioriost/utisuna"
-  url "https://github.com/rioriost/utisuna/releases/download/{{VERSION}}/utisuna-{{VERSION}}-macos.zip"
+  homepage "https://github.com/{{REPO}}"
+  url "https://github.com/{{REPO}}/releases/download/{{TAG}}/{{ARCHIVE}}"
   sha256 "{{SHA256}}"
   version "{{VERSION}}"
 
+  depends_on arch: :arm64
+  depends_on macos: :monterey
+
   def install
-    bin.install "utisuna-#{version}/utisuna" => "utisuna"
+    bin.install "utisuna"
   end
 
   test do
     assert_match "Set the default app for the content type of a sample file",
                  shell_output("#{bin}/utisuna --help")
+    assert_equal version.to_s, shell_output("#{bin}/utisuna --version").strip
   end
 end

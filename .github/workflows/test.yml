@@ -1,0 +1,21 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift tests
+        run: swift test
+      - name: Release workflow tests
+        run: python3 -m unittest discover -s Tests/release -v
+      - name: Shell syntax
+        run: bash -n scripts/release-common.sh scripts/release.sh scripts/notarize.sh

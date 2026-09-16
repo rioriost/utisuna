@@ -10,7 +10,7 @@ public struct OutputLines: Equatable {
 
 public enum Runner {
     public static func execute(options: Options, setter: DefaultApplicationSetting) async throws -> OutputLines {
-        _ = try RoleMapper.normalize(options.role)
+        let role = try RoleMapper.normalize(options.role)
         let resolved = try PathResolver.resolve(sampleFilePath: options.sampleFilePath, applicationPath: options.applicationPath)
         let type = try PathResolver.resolveType(for: resolved.sampleFileURL)
 
@@ -18,7 +18,16 @@ public enum Runner {
         lines.append("sample file : \(resolved.sampleFileURL.path)")
         lines.append("application : \(resolved.applicationURL.path)")
         lines.append("content type: \(type.identifier) (\(type.description))")
-        lines.append("role       : \(options.role)")
+        lines.append("role       : \(role)")
+
+        if options.verbose {
+            lines.append("scope      : all files with this content type, not a per-file or role-specific change")
+            if options.dryRun {
+                lines.append("confirmation: no request sent to macOS in dry run; applying a change may prompt for confirmation")
+            } else {
+                lines.append("confirmation: macOS may prompt for confirmation when applying the change")
+            }
+        }
 
         if options.dryRun {
             lines.append("status     : dry run, no changes made")

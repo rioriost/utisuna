@@ -17,6 +17,7 @@ build/
 *.pkg
 *.zip
 *.sha256
+__pycache__/
 
 # macOS
 .DS_Store
